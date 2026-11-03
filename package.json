@@ -1,0 +1,22 @@
+{
+  "name": "santa-social",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm run dev -w backend\" \"npm run dev -w frontend\"",
+    "build": "npm run build -w backend && npm run build -w frontend",
+    "test": "npm run test -w backend",
+    "db:migrate": "npm run db:migrate -w backend",
+    "db:seed": "npm run db:seed -w backend",
+    "check": "node scripts/check-js.mjs",
+    "qr:registration": "node scripts/generate-registration-qr.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "concurrently": "^9.2.1",
+    "prettier": "^3.9.10"
+  }
+}

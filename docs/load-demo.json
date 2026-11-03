@@ -1,0 +1,10 @@
+{
+  "sessions": 300,
+  "statuses": {
+    "200": 299,
+    "429": 1
+  },
+  "elapsedMs": 843.5656,
+  "p95Ms": 764.2146,
+  "note": "Single-host demo browsing only. Not a production throughput claim."
+}

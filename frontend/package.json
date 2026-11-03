@@ -1,0 +1,23 @@
+{
+  "name": "frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "check": "node ../scripts/check-js.mjs frontend"
+  },
+  "dependencies": {
+    "next": "16.4.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "lucide-react": "^0.577.0",
+    "qrcode": "^1.5.4",
+    "qr-scanner": "^1.4.2",
+    "jspdf": "^4.2.0",
+    "zod": "^4.3.6",
+    "tailwindcss": "^4.2.1",
+    "@tailwindcss/postcss": "^4.2.1"
+  }
+}

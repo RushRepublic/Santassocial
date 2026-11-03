@@ -1,0 +1,984 @@
+"use client";
+import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  LayoutDashboard,
+  Ticket,
+  CreditCard,
+  ScanLine,
+  Settings,
+  LogOut,
+  ArrowUpRight,
+  Search,
+  Download,
+  Users,
+  IndianRupee,
+  CheckCircle,
+  Clock,
+  ArrowLeft,
+  Menu,
+} from "lucide-react";
+import { api, post, money, dateTime, eventDate } from "@/lib/api";
+import { Wordmark, Notice, Loading, Status, DemoBanner } from "./common";
+export function StaffLogin({ scanner = false }) {
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [demo, setDemo] = useState(false);
+  useEffect(() => {
+    api("/events")
+      .then((r) => setDemo(r.demo))
+      .catch(() => {});
+  }, []);
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const user = await post("/auth/login", { email, password });
+      if (scanner && !["ADMIN", "SCANNER"].includes(user.role)) {
+        setError("This account does not have scanner access.");
+        return;
+      }
+      router.push(scanner ? "/scanner" : "/admin/dashboard");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <main className="staff-login">
+      <Link href="/">
+        <Wordmark />
+      </Link>
+      <div className="narrow-card">
+        <div className="round-icon">
+          {scanner ? <ScanLine /> : <LayoutDashboard />}
+        </div>
+        <p className="eyebrow">SANTA SOCIAL · EVENT OPERATIONS</p>
+        <h1>{scanner ? "Welcome, gate team." : "Hello, organiser."}</h1>
+        <p className="muted">
+          Sign in to{" "}
+          {scanner
+            ? "verify tickets and welcome guests."
+            : "manage the celebration."}
+        </p>
+        <form onSubmit={submit}>
+          <label>
+            Email address
+            <input
+              required
+              type="email"
+              autoComplete="username"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </label>
+          <label>
+            Password
+            <input
+              required
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </label>
+          {error && <Notice>{error}</Notice>}
+          <button className="button full" disabled={busy}>
+            {busy ? "Signing in…" : "Sign in securely"}
+            <ArrowUpRight size={17} />
+          </button>
+        </form>
+        {demo && (
+          <div className="demo-code">
+            Local demo account
+            <br />
+            <b>{scanner ? "scanner" : "admin"}@santasocial.local</b>
+            <br />
+            Password: <b>SantaDemo2026!</b>
+          </div>
+        )}
+        <Link className="back-link" href="/">
+          Back to the celebration
+        </Link>
+      </div>
+    </main>
+  );
+}
+const navigation = [
+  ["dashboard", "Overview", LayoutDashboard],
+  ["bookings", "Bookings", Ticket],
+  ["payments", "Payments", CreditCard],
+  ["checkins", "Check-ins", ScanLine],
+  ["settings", "Event settings", Settings],
+];
+export function Admin() {
+  const path = usePathname();
+  const router = useRouter();
+  const section = path.split("/")[2] || "dashboard";
+  const id = path.split("/")[3];
+  const [identity, setIdentity] = useState(null);
+  const [error, setError] = useState("");
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    api("/auth/me")
+      .then((user) => {
+        if (!["ADMIN", "CASHIER"].includes(user.role))
+          router.replace("/admin/login");
+        else setIdentity(user);
+      })
+      .catch(() => router.replace("/admin/login"));
+  }, [router]);
+  async function logout() {
+    await post("/auth/logout", {});
+    router.push("/admin/login");
+  }
+  if (!identity) return <Loading />;
+  return (
+    <div className="admin-layout">
+      <aside className={`admin-sidebar ${open ? "open" : ""}`}>
+        <Link href="/">
+          <Wordmark />
+        </Link>
+        <p className="eyebrow">EVENT MANAGEMENT</p>
+        <nav>
+          {navigation
+            .filter(([key]) => key !== "settings" || identity.role === "ADMIN")
+            .map(([key, label, Icon]) => (
+              <Link
+                onClick={() => setOpen(false)}
+                key={key}
+                href={`/admin/${key}`}
+                className={section === key ? "active" : ""}
+              >
+                <Icon size={19} />
+                {label}
+              </Link>
+            ))}
+          {identity.role === "ADMIN" && (
+            <Link href="/scanner">
+              <ScanLine size={19} />
+              Open gate scanner
+            </Link>
+          )}
+        </nav>
+        <div className="admin-profile">
+          <span>{identity.name?.charAt(0)}</span>
+          <div>
+            <b>{identity.name}</b>
+            <small>{identity.role}</small>
+          </div>
+          <button
+            aria-label="Sign out"
+            onClick={() => logout().catch((e) => setError(e.message))}
+          >
+            <LogOut size={18} />
+          </button>
+        </div>
+      </aside>
+      <div className="admin-main">
+        <div className="admin-topbar">
+          <button
+            className="menu-button"
+            aria-label="Toggle menu"
+            onClick={() => setOpen(!open)}
+          >
+            <Menu />
+          </button>
+          <span>
+            Santa Social <b>9th Edition</b>
+          </span>
+          <Link href="/" target="_blank">
+            View event website <ArrowUpRight size={15} />
+          </Link>
+        </div>
+        <DemoBanner />
+        <div className="admin-content">
+          {error && <Notice>{error}</Notice>}
+          {section === "dashboard" ? (
+            <Dashboard />
+          ) : section === "bookings" ? (
+            id ? (
+              <BookingDetail id={id} role={identity.role} />
+            ) : (
+              <Bookings />
+            )
+          ) : section === "settings" ? (
+            <EventSettingsForm />
+          ) : (
+            <OperationsTable kind={section} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+function DateFilter({ value, onChange }) {
+  return (
+    <div className="date-filter">
+      {[
+        ["all", "Both days"],
+        ["2026-12-05", "Dec 5"],
+        ["2026-12-06", "Dec 6"],
+      ].map(([v, label]) => (
+        <button
+          key={v}
+          className={value === v ? "active" : ""}
+          onClick={() => onChange(v)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+function Dashboard() {
+  const [date, setDate] = useState("all");
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const load = useCallback(
+    () =>
+      api(`/admin/dashboard?date=${date}`)
+        .then(setData)
+        .catch((e) => setError(e.message)),
+    [date],
+  );
+  useEffect(() => {
+    void load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, [load]);
+  return (
+    <>
+      <div className="admin-page-heading">
+        <div>
+          <p className="eyebrow">A LITTLE OVERVIEW OF THE BIG CELEBRATION</p>
+          <h1>Let’s make it a merry one.</h1>
+          <p>5 & 6 December 2026 · Park Grounds, CODISSIA</p>
+        </div>
+        <DateFilter value={date} onChange={setDate} />
+      </div>
+      {error && <Notice>{error}</Notice>}
+      {!data ? (
+        <Loading />
+      ) : (
+        <>
+          <div className="stat-grid">
+            {[
+              [
+                Ticket,
+                "Total bookings",
+                data.bookings,
+                "Across all payment states",
+              ],
+              [
+                Users,
+                "Confirmed guests",
+                data.attendees,
+                `${data.adults} adults · ${data.kids} kids`,
+              ],
+              [
+                IndianRupee,
+                "Captured revenue",
+                money(data.revenue),
+                `${money(data.cashRevenue)} cash · ${money(data.onlineRevenue)} online`,
+              ],
+              [
+                CheckCircle,
+                "People welcomed",
+                data.entered,
+                `${data.checkedGroups} groups checked in`,
+              ],
+            ].map(([Icon, label, value, sub], i) => {
+              const I = Icon;
+              return (
+                <div className="stat-card" key={i}>
+                  <div>
+                    <span>{String(label)}</span>
+                    <I size={20} />
+                  </div>
+                  <strong>{String(value)}</strong>
+                  <small>{String(sub)}</small>
+                </div>
+              );
+            })}
+          </div>
+          <div className="dashboard-panels">
+            <div className="admin-card">
+              <div className="card-heading">
+                <h2>The guest list is growing.</h2>
+                <span className="status status-paid">EVENT CAPACITY</span>
+              </div>
+              <div className="capacity-number">
+                <strong>
+                  {(
+                    data.availability.capacity - data.availability.remaining
+                  ).toLocaleString("en-IN")}
+                </strong>
+                <span>
+                  / {data.availability.capacity.toLocaleString("en-IN")} people
+                </span>
+              </div>
+              <div className="progress-bar">
+                <span
+                  style={{
+                    width: `${Math.min(100, (100 * (data.availability.capacity - data.availability.remaining)) / data.availability.capacity)}%`,
+                  }}
+                />
+              </div>
+              <p>
+                {data.availability.remaining.toLocaleString("en-IN")} spaces
+                remaining across both days
+              </p>
+              <div className="day-capacity">
+                {data.availability.days.map((d) => (
+                  <div key={d.date}>
+                    <CalendarIcon />
+                    <span>
+                      December {d.date.endsWith("05") ? "5" : "6"}
+                      <small>
+                        {d.remaining.toLocaleString("en-IN")} bookable spaces
+                      </small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="admin-card pending-card">
+              <Clock size={26} />
+              <h2>A little follow-up.</h2>
+              <strong>{data.pendingCash}</strong>
+              <p>Cash bookings awaiting payment</p>
+              <Link
+                className="button"
+                href="/admin/bookings?status=PENDING_CASH"
+              >
+                Review bookings <ArrowUpRight size={16} />
+              </Link>
+              {data.notificationFailures > 0 && (
+                <p className="error-text">
+                  {data.notificationFailures} messages need a delivery retry.
+                </p>
+              )}
+            </div>
+          </div>
+          <Bookings compact />
+        </>
+      )}
+    </>
+  );
+}
+function CalendarIcon() {
+  return (
+    <span className="calendar-mini">
+      DEC
+      <br />
+      <b>2026</b>
+    </span>
+  );
+}
+function Bookings({ compact = false }) {
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
+  const [date, setDate] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const value = new URLSearchParams(location.search).get("status");
+    if (value) setStatus(value);
+  }, []);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setSearch(query);
+      setPage(1);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query]);
+  const params = new URLSearchParams({
+    q: search,
+    date,
+    status,
+    page: String(page),
+  });
+  useEffect(() => {
+    let cancelled = false;
+    api(
+      `/admin/bookings?${new URLSearchParams({ q: search, date, status, page: String(page) })}`,
+    )
+      .then((d) => {
+        if (!cancelled) setData(d);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [search, date, status, page]);
+  return (
+    <section className="admin-card bookings-card">
+      {!compact && (
+        <div className="admin-page-heading">
+          <div>
+            <h1>Every booking, in one place.</h1>
+            <p>Manage guests, payments, and group tickets.</p>
+          </div>
+        </div>
+      )}
+      <div className="card-heading">
+        <h2>
+          {compact ? "Recent bookings" : "Guest bookings"}{" "}
+          {data && <span className="count-badge">{data.total}</span>}
+        </h2>
+        {compact ? (
+          <Link href="/admin/bookings">
+            View all <ArrowUpRight size={15} />
+          </Link>
+        ) : (
+          <a
+            className="button outline small"
+            href={`/api/admin/bookings?${params}&format=csv`}
+          >
+            <Download size={16} />
+            Export CSV
+          </a>
+        )}
+      </div>
+      <div className="table-tools">
+        <div className="search-input">
+          <Search size={17} />
+          <input
+            aria-label="Search bookings"
+            placeholder="Search name, mobile or booking reference…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        {!compact && (
+          <>
+            <select
+              aria-label="Filter payment status"
+              value={status}
+              onChange={(e) => {
+                setStatus(e.target.value);
+                setPage(1);
+              }}
+            >
+              {[
+                "all",
+                "PENDING_CASH",
+                "PENDING_PAYMENT",
+                "PAID",
+                "FREE",
+                "EXPIRED",
+                "CANCELLED",
+                "PAYMENT_REVIEW",
+              ].map((s) => (
+                <option key={s} value={s}>
+                  {s === "all" ? "All payment states" : s.replaceAll("_", " ")}
+                </option>
+              ))}
+            </select>
+            <DateFilter
+              value={date}
+              onChange={(v) => {
+                setDate(v);
+                setPage(1);
+              }}
+            />
+          </>
+        )}
+      </div>
+      {error && <Notice>{error}</Notice>}
+      {!data ? (
+        <Loading />
+      ) : (
+        <>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Booking / guest</th>
+                  <th>Event date</th>
+                  <th>Group</th>
+                  <th>Amount</th>
+                  <th>Payment</th>
+                  <th>Entry</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {data.rows.slice(0, compact ? 5 : 25).map((b) => (
+                  <tr key={b.id}>
+                    <td>
+                      <Link href={`/admin/bookings/${b.id}`}>
+                        <b>{b.name}</b>
+                        <small>{b.reference}</small>
+                      </Link>
+                    </td>
+                    <td>
+                      {b.eventDate.endsWith("05") ? "5" : "6"} Dec 2026
+                      <small>{b.mobile}</small>
+                    </td>
+                    <td>
+                      {b.people} guests
+                      <small>
+                        {b.adults} adults · {b.kids} kids
+                      </small>
+                    </td>
+                    <td>
+                      <b>{money(b.amount)}</b>
+                      <small>{b.method}</small>
+                    </td>
+                    <td>
+                      <Status value={b.status} />
+                    </td>
+                    <td>
+                      <span
+                        className={`entry-dot ${b.checkedInAt ? "entered" : ""}`}
+                      />
+                      {b.checkedInAt ? "Checked in" : "Not entered"}
+                    </td>
+                    <td>
+                      <Link
+                        aria-label={`View ${b.reference}`}
+                        href={`/admin/bookings/${b.id}`}
+                      >
+                        <ArrowUpRight size={18} />
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!data.rows.length && (
+              <div className="empty">No bookings match these filters.</div>
+            )}
+          </div>
+          {!compact && (
+            <div className="pagination">
+              <small>
+                {data.total} bookings · Page {page} of {Math.max(1, data.pages)}
+              </small>
+              <div>
+                <button disabled={page <= 1} onClick={() => setPage(page - 1)}>
+                  Previous
+                </button>
+                <button
+                  disabled={page >= data.pages}
+                  onClick={() => setPage(page + 1)}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+function BookingDetail({ id, role }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [action, setAction] = useState("");
+  const [amount, setAmount] = useState("");
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(
+    () =>
+      api(`/admin/bookings/${id}`)
+        .then(setData)
+        .catch((e) => setError(e.message)),
+    [id],
+  );
+  useEffect(() => {
+    void load();
+  }, [load]);
+  async function run(kind) {
+    setBusy(true);
+    setError("");
+    try {
+      await post(
+        `/admin/bookings/${id}/${kind}`,
+        kind === "approve"
+          ? { amountReceived: Math.round(Number(amount) * 100) }
+          : {},
+      );
+      setMessage(
+        kind === "approve"
+          ? "Cash receipt recorded and group ticket activated."
+          : kind === "notify"
+            ? "Notification queued for delivery."
+            : "Booking updated.",
+      );
+      setAction("");
+      await load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const b = data?.booking;
+  return (
+    <>
+      <Link className="back-link" href="/admin/bookings">
+        <ArrowLeft size={16} />
+        All bookings
+      </Link>
+      {error && <Notice>{error}</Notice>}
+      {message && <Notice success>{message}</Notice>}
+      {!b ? (
+        <Loading />
+      ) : (
+        <>
+          <div className="admin-page-heading">
+            <div>
+              <p className="eyebrow">{b.reference}</p>
+              <h1>{b.name}</h1>
+              <p>
+                {b.mobile} · {b.email}
+              </p>
+            </div>
+            <Status value={b.status} />
+          </div>
+          <div className="dashboard-panels">
+            <div className="admin-card">
+              <h2>Booking details</h2>
+              <dl className="detail-list">
+                <dt>Event day</dt>
+                <dd>{eventDate(b.eventDate)}</dd>
+                <dt>Guests</dt>
+                <dd>
+                  {b.adults} adults + {b.kids} kids = {b.people}
+                </dd>
+                <dt>Amount</dt>
+                <dd>
+                  {money(b.amount)} · {b.method}
+                </dd>
+                <dt>Created</dt>
+                <dd>{dateTime(b.createdAt)}</dd>
+                <dt>Reservation expires</dt>
+                <dd>{dateTime(b.holdUntil)}</dd>
+                <dt>Entry</dt>
+                <dd>
+                  {b.checkedInAt ? dateTime(b.checkedInAt) : "Not entered"}
+                </dd>
+                <dt>Cash receipt</dt>
+                <dd>{data.payments[0]?.receipt || "—"}</dd>
+                <dt>Approved by</dt>
+                <dd>{data.payments[0]?.approvedBy || "—"}</dd>
+              </dl>
+            </div>
+            <div className="admin-card">
+              <h2>Booking actions</h2>
+              {b.status === "PENDING_CASH" && (
+                <button
+                  className="button full"
+                  onClick={() => setAction("approve")}
+                >
+                  Record cash payment
+                </button>
+              )}
+              {b.method === "CASH" && b.status === "EXPIRED" && (
+                <button
+                  className="button full"
+                  disabled={busy}
+                  onClick={() => run("restore")}
+                >
+                  Restore reservation if capacity permits
+                </button>
+              )}
+              {["PAID", "FREE"].includes(b.status) && (
+                <Link className="button full" href={`/ticket/${b.id}`}>
+                  View group ticket
+                </Link>
+              )}
+              <button
+                className="button outline full"
+                disabled={busy}
+                onClick={() => run("notify")}
+              >
+                Resend notification
+              </button>
+              {role === "ADMIN" &&
+                ["PENDING_CASH", "PENDING_PAYMENT"].includes(b.status) && (
+                  <button
+                    className="text-button danger"
+                    onClick={() => setAction("cancel")}
+                  >
+                    Cancel unpaid booking
+                  </button>
+                )}
+              <p className="field-hint">
+                Payment evidence and approval actions are audited.
+              </p>
+              <h3>Notification delivery</h3>
+              {data.notifications.map((n) => (
+                <p key={n.id}>
+                  {n.type.replaceAll("_", " ")} · <Status value={n.status} />
+                  <small>{n.attempts} attempt(s)</small>
+                </p>
+              ))}
+            </div>
+          </div>
+          {action && (
+            <div
+              className="modal-backdrop"
+              role="dialog"
+              aria-modal="true"
+              aria-label={
+                action === "approve" ? "Record cash receipt" : "Cancel booking"
+              }
+            >
+              <div className="modal-card">
+                <h2>
+                  {action === "approve"
+                    ? "Confirm cash collected"
+                    : "Cancel this unpaid booking?"}
+                </h2>
+                <p>
+                  {action === "approve"
+                    ? `Collect ${money(b.amount)} for ${b.reference}. Confirm only after receiving the money.`
+                    : "This releases the group’s reserved capacity."}
+                </p>
+                {action === "approve" && (
+                  <label>
+                    Amount received in rupees
+                    <input
+                      autoFocus
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                    />
+                  </label>
+                )}
+                <button
+                  className="button full"
+                  disabled={
+                    busy ||
+                    (action === "approve" && Number(amount) * 100 !== b.amount)
+                  }
+                  onClick={() => run(action)}
+                >
+                  {busy ? "Saving…" : "Confirm"}
+                </button>
+                <button
+                  className="text-button"
+                  disabled={busy}
+                  onClick={() => setAction("")}
+                >
+                  Go back
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+function OperationsTable({ kind }) {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    api(`/admin/${kind === "payments" ? "payments" : "checkins"}`)
+      .then(setRows)
+      .catch((e) => setError(e.message));
+  }, [kind]);
+  return (
+    <div className="admin-card">
+      <h1>{kind === "payments" ? "Payment records" : "Group entry history"}</h1>
+      <p className="muted">
+        {kind === "payments"
+          ? "Captured payments and pending orders. Amounts shown in INR."
+          : "All recorded group entries, displayed in Asia/Kolkata."}
+      </p>
+      {error && <Notice>{error}</Notice>}
+      {!rows ? (
+        <Loading />
+      ) : (
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Booking</th>
+                <th>Guest</th>
+                <th>{kind === "payments" ? "Amount" : "People"}</th>
+                <th>{kind === "payments" ? "Status" : "Entered at"}</th>
+                <th>
+                  {kind === "payments" ? "Receipt / payment ID" : "Staff ID"}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    <Link href={`/admin/bookings/${r.bookingId}`}>
+                      {r.reference}
+                    </Link>
+                  </td>
+                  <td>{r.name}</td>
+                  <td>{kind === "payments" ? money(r.amount) : r.people}</td>
+                  <td>
+                    {kind === "payments" ? (
+                      <Status value={r.status} />
+                    ) : (
+                      dateTime(r.createdAt)
+                    )}
+                  </td>
+                  <td>
+                    {kind === "payments"
+                      ? r.receipt || r.paymentId || r.orderId || "—"
+                      : r.staffId}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!rows.length && <div className="empty">No records yet.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+function EventSettingsForm() {
+  const [values, setValues] = useState(null);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api("/admin/settings")
+      .then(setValues)
+      .catch((e) => setError(e.message));
+  }, []);
+  async function submit(e) {
+    e.preventDefault();
+    if (!values) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const {
+        capacity,
+        day5Capacity,
+        day6Capacity,
+        maxGroup,
+        holdMinutes,
+        cashHoldMinutes,
+        allowKidsOnly,
+      } = values;
+      await api("/admin/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          capacity,
+          day5Capacity,
+          day6Capacity,
+          maxGroup,
+          holdMinutes,
+          cashHoldMinutes,
+          allowKidsOnly,
+        }),
+      });
+      setMessage("Event settings saved.");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="admin-card settings-card">
+      <h1>A little planning goes a long way.</h1>
+      <p className="muted">
+        Manage attendance limits and reservation policies.
+      </p>
+      {error && <Notice>{error}</Notice>}
+      {message && <Notice success>{message}</Notice>}
+      {!values ? (
+        <Loading />
+      ) : (
+        <form onSubmit={submit}>
+          {[
+            ["capacity", "Total capacity across both days", false],
+            [
+              "day5Capacity",
+              "December 5 capacity (blank = no daily limit)",
+              true,
+            ],
+            [
+              "day6Capacity",
+              "December 6 capacity (blank = no daily limit)",
+              true,
+            ],
+            ["maxGroup", "Maximum guests per booking", false],
+            ["holdMinutes", "Online reservation expiry (minutes)", false],
+            ["cashHoldMinutes", "Cash reservation expiry (minutes)", false],
+          ].map(([key, label, optional]) => (
+            <label key={key}>
+              {label}
+              <input
+                type="number"
+                min={key.includes("Minutes") ? 5 : 1}
+                max={
+                  key === "capacity"
+                    ? 1000000
+                    : key === "maxGroup"
+                      ? 100
+                      : key === "cashHoldMinutes"
+                        ? 10080
+                        : key === "holdMinutes"
+                          ? 1440
+                          : 1000000
+                }
+                required={!optional}
+                value={values[key] ?? ""}
+                onChange={(e) =>
+                  setValues({
+                    ...values,
+                    [key]:
+                      e.target.value === "" && optional
+                        ? null
+                        : Number(e.target.value),
+                  })
+                }
+              />
+            </label>
+          ))}
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={!!values.allowKidsOnly}
+              onChange={(e) =>
+                setValues({
+                  ...values,
+                  allowKidsOnly: e.target.checked ? 1 : 0,
+                })
+              }
+            />{" "}
+            Allow children-only free bookings under an approved supervision
+            policy
+          </label>
+          <p className="field-hint">
+            Disabled by default. Enable only after confirming an appropriate
+            supervised-entry policy.
+          </p>
+          <button className="button" disabled={busy}>
+            {busy ? "Saving…" : "Save event settings"}
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}

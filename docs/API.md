@@ -1,0 +1,74 @@
+# Express API
+
+All routes are under `/api`, proxied through Next.js on the same origin. JSON mutations require `Origin` equal to `FRONTEND_ORIGIN`. Cookies are HTTP-only, SameSite=Lax, restricted to `/api`, and Secure in production. Customer sessions last 30 minutes; staff sessions last eight hours. All responses avoid caching. Request bodies are limited to 32 KB; webhooks allow 256 KB.
+
+Errors return `{ "error": "Useful message" }`. 400 = validation, 401 = authentication, 403 = permission, 404 = missing resource, 409 = state/capacity conflict, 429 = rate limit, 503 = unconfigured provider. Booking amounts and approval amounts are integer **paise**.
+
+| Method  | Endpoint                      | Access / behavior                                                                                        |
+| ------- | ----------------------------- | -------------------------------------------------------------------------------------------------------- |
+| GET     | `/health`                     | Public; verifies database connectivity and reports mode                                                  |
+| GET     | `/events`                     | Public; event configuration, availability, demo indicator                                                |
+| GET     | `/events/:id/availability`    | Public; current single event’s capacity                                                                  |
+| POST    | `/otp/send`                   | Public, rate limited; `{mobile}`; returns `challengeId`, expiry; `demoCode` only in demo                 |
+| POST    | `/otp/verify`                 | `{mobile, challengeId, otp}`; consumes code and issues customer session                                  |
+| POST    | `/auth/login`                 | `{email,password}`; issues staff session                                                                 |
+| POST    | `/auth/logout`                | Clears cookie                                                                                            |
+| GET     | `/auth/me`                    | Authenticated identity                                                                                   |
+| POST    | `/bookings`                   | Verified mobile; `Idempotency-Key` header required                                                       |
+| GET     | `/bookings/:id`               | Booking owner or admin/cashier                                                                           |
+| POST    | `/payments/razorpay/order`    | Owner; `{bookingId}`; returns public checkout parameters                                                 |
+| POST    | `/payments/razorpay/verify`   | Owner; `{bookingId,razorpay_order_id,razorpay_payment_id,razorpay_signature}`; fetches captured evidence |
+| POST    | `/webhooks/razorpay`          | Raw signed Razorpay payload; no browser Origin requirement                                               |
+| POST    | `/demo/payments/complete`     | Demo only; owner; `{bookingId}`; requires a demo order                                                   |
+| POST    | `/tickets/retrieve`           | Verified mobile; all bookings for that session’s mobile                                                  |
+| GET     | `/tickets/:id`                | Owner/admin/cashier or `Authorization: Bearer ss_…` ticket credential                                    |
+| GET     | `/tickets/:id/download`       | Owner/admin/cashier; PDF; add `?format=png` for QR image                                                 |
+| GET     | `/admin/dashboard?date=all`   | Admin/cashier; dates also `2026-12-05` or `2026-12-06`                                                   |
+| GET     | `/admin/bookings`             | Admin/cashier; `q`, `date`, `status`, `page`; 25 per page; `format=csv` exports matches                  |
+| GET     | `/admin/bookings/:id`         | Admin/cashier; booking, payment, delivery, check-in records                                              |
+| POST    | `/admin/bookings/:id/approve` | Admin/cashier; `{amountReceived}`; cash only                                                             |
+| POST    | `/admin/bookings/:id/restore` | Admin/cashier; expired cash only; capacity checked again                                                 |
+| POST    | `/admin/bookings/:id/cancel`  | Admin; unpaid, not checked-in bookings only                                                              |
+| POST    | `/admin/bookings/:id/notify`  | Admin/cashier; queues notification retry                                                                 |
+| GET     | `/admin/payments`             | Admin/cashier; most recent 500 records                                                                   |
+| GET     | `/admin/checkins`             | Admin/cashier: latest 100; scanner: own latest 100                                                       |
+| GET/PUT | `/admin/settings`             | Admin only; inventory row locked on changes                                                              |
+| POST    | `/scanner/verify`             | Admin/scanner; `{token}`; checks payment, date, previous entry                                           |
+| POST    | `/scanner/checkin`            | Admin/scanner; `{token}` and `Idempotency-Key`; revalidates atomically                                   |
+
+## Booking request
+
+```json
+{
+  "name": "Guest Name",
+  "email": "guest@example.com",
+  "eventDate": "2026-12-05",
+  "adults": 2,
+  "kids": 1,
+  "method": "RAZORPAY"
+}
+```
+
+Use `CASH` for counter payment. Mobile comes from the verified server session; client-supplied mobile, totals, payment statuses or QR fields are ignored. A reused idempotency key must match the same mobile and booking payload.
+
+## Event settings request
+
+```json
+{
+  "capacity": 20000,
+  "day5Capacity": null,
+  "day6Capacity": null,
+  "maxGroup": 20,
+  "holdMinutes": 20,
+  "cashHoldMinutes": 1440,
+  "allowKidsOnly": 0
+}
+```
+
+Null daily limits mean the combined event limit still governs either date. Limits cannot be reduced below active confirmed/held attendance. `allowKidsOnly` is disabled by default and requires an organiser-approved supervision policy.
+
+## Payment states
+
+`PENDING_PAYMENT` or `PENDING_CASH` → `PAID` after verified evidence/authorised cash receipt. Zero-price eligible bookings → `FREE`. Unpaid holds → `EXPIRED` or `CANCELLED`. Captured late payment without inventory → `PAYMENT_REVIEW`; this is never an admission ticket. Check-in is a separate timestamp and unique record; it does not make tickets disappear from retrieval.
+
+For secure shared ticket links, the browser reads the URL fragment and supplies a bearer header. Client-generated PDF/PNG downloads work for these links too. Do not log bearer credentials. Retrieving by mobile/reference alone is not permitted.

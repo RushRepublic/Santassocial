@@ -1,0 +1,11 @@
+# Santa Social project instructions
+
+- Use JavaScript throughout the authored application. React components, layouts and pages must use `.jsx`; application logic, utilities, backend modules and tests must use `.js`.
+- Keep Next.js App Router and the separate Express API. Do not introduce Vite, TypeScript syntax, `.ts`/`.tsx` source, TypeScript declarations, `tsconfig.json`, or a TypeScript runtime/build dependency.
+- Next.js configuration uses `frontend/next.config.mjs`. Existing tooling configuration/scripts may use `.mjs` or `.cjs` where required by their module format.
+- Preserve `frontend/jsconfig.json`'s `@/*` alias. The backend is native Node.js ESM and uses explicit `.js` extensions on relative imports. It runs directly from `backend/src/`, including in production.
+- Keep runtime Zod validation, database schema, endpoint contracts, server-verified captured payments, one QR per booking, cash approval, OTP restrictions and atomic group entry intact.
+- Do not manually edit generated `.next` files or dependency source. Retain the framework-managed guidance in `frontend/AGENTS.md`.
+- Run `npm run check`, `npm test`, and `npm run build` after substantive changes. Use the existing browser QA for customer/staff workflow changes. Report unavailable external integration or MySQL verification honestly.
+- `/` is the direct booking landing page; `/register` is a legacy redirect. Preserve the existing registration UI and do not restore the promotional homepage. Public registration QR assets use only the actual configured deployed HTTPS URL and remain separate from per-booking admission QR tokens; never generate final assets for localhost, private addresses or sample domains.
+- Registration mobile OTP verification belongs inline in the WhatsApp field on `/`. Keep only Your booking and Checkout in the progress bar; `/verify-otp` is a legacy redirect to `/`. Require a matching server-verified mobile session before checkout or booking creation. Changing a number or losing that session must invalidate the verified indicator. Preserve the separate secure ticket-retrieval verification flow.

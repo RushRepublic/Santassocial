@@ -1,0 +1,332 @@
+import { randomUUID, randomBytes } from "node:crypto";
+import { demo, config } from "./config.js";
+import { hash, qrToken } from "./security.js";
+export class AppError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+export const now = () => new Date().toISOString();
+export const fail = (status, message) => {
+  throw new AppError(status, message);
+};
+export async function settings(db) {
+  return (await db.all("SELECT * FROM events WHERE id = ?", ["santa-2026"]))[0];
+}
+export async function lockEvent(tx) {
+  return (
+    await tx.all("SELECT * FROM events WHERE id = ? FOR UPDATE", ["santa-2026"])
+  )[0];
+}
+export async function expire(tx) {
+  await tx.run(
+    "UPDATE bookings SET status = 'EXPIRED', updatedAt = ? WHERE status IN ('PENDING_CASH','PENDING_PAYMENT') AND holdUntil < ?",
+    [now(), now()],
+  );
+}
+export async function availability(db) {
+  const e = await settings(db);
+  const rows = await db.all(
+    "SELECT eventDate,SUM(people) AS total FROM bookings WHERE eventId = ? AND (status IN ('PAID','FREE') OR (status IN ('PENDING_CASH','PENDING_PAYMENT') AND holdUntil > ?)) GROUP BY eventDate",
+    [e.id, now()],
+  );
+  const used = rows.reduce((n, r) => n + Number(r.total), 0);
+  return {
+    ...e,
+    remaining: Math.max(0, e.capacity - used),
+    days: ["2026-12-05", "2026-12-06"].map((date) => ({
+      date,
+      remaining: Math.max(
+        0,
+        Math.min(
+          e.capacity - used,
+          (date.endsWith("05") ? e.day5Capacity : e.day6Capacity) === null
+            ? e.capacity
+            : Number(date.endsWith("05") ? e.day5Capacity : e.day6Capacity) -
+                Number(rows.find((r) => r.eventDate === date)?.total || 0),
+        ),
+      ),
+    })),
+  };
+}
+async function ensureCapacity(tx, e, date, people) {
+  const a = await availability(tx);
+  if (
+    a.remaining < people ||
+    a.days.find((d) => d.date === date).remaining < people
+  )
+    fail(409, "This date has insufficient capacity for your group.");
+}
+export async function audit(tx, userId, action, entityId) {
+  await tx.run(
+    "INSERT INTO audit_logs (id,userId,action,entityId,createdAt) VALUES (?,?,?,?,?)",
+    [randomUUID(), userId, action, entityId, now()],
+  );
+}
+export async function notification(tx, b, type) {
+  const exists = await tx.all(
+    "SELECT id FROM notification_logs WHERE bookingId = ? AND type = ?",
+    [b.id, type],
+  );
+  if (!exists.length)
+    await tx.run(
+      "INSERT INTO notification_logs (id,bookingId,type,status,nextAttemptAt) VALUES (?,?,?,?,?)",
+      [randomUUID(), b.id, type, "QUEUED", now()],
+    );
+}
+export async function activate(tx, b, status = "PAID") {
+  await tx.run(
+    "UPDATE bookings SET status = ?, qrHash = ?, updatedAt = ? WHERE id = ?",
+    [status, hash(qrToken(b)), now(), b.id],
+  );
+  await notification(tx, b, "TICKET");
+}
+export function publicBooking(b) {
+  const { ticketNonce, qrHash, ...safe } = b;
+  return {
+    ...safe,
+    qrToken: ["PAID", "FREE"].includes(b.status) ? qrToken(b) : null,
+    demo,
+  };
+}
+export async function getBooking(db, id) {
+  const b = (
+    await db.all("SELECT * FROM bookings WHERE id = ? OR reference = ?", [
+      id,
+      id,
+    ])
+  )[0];
+  if (!b) fail(404, "Booking not found.");
+  return b;
+}
+export async function createBooking(db, input, mobile, key) {
+  const fingerprint = hash(JSON.stringify(input));
+  return db.transaction(async (tx) => {
+    const e = await lockEvent(tx);
+    await expire(tx);
+    const previous = (
+      await tx.all("SELECT * FROM booking_requests WHERE id = ?", [key])
+    )[0];
+    if (previous) {
+      if (previous.mobile !== mobile || previous.fingerprint !== fingerprint)
+        fail(409, "This request key is already in use.");
+      return getBooking(tx, previous.bookingId);
+    }
+    const people = input.adults + input.kids;
+    if (people < 1 || people > e.maxGroup)
+      fail(400, `Choose between 1 and ${e.maxGroup} guests.`);
+    if (input.adults === 0 && !e.allowKidsOnly)
+      fail(400, "A supervising adult is required for children under five.");
+    await ensureCapacity(tx, e, input.eventDate, people);
+    const id = randomUUID(),
+      amount = input.adults * 20000,
+      status =
+        amount === 0
+          ? "FREE"
+          : input.method === "CASH"
+            ? "PENDING_CASH"
+            : "PENDING_PAYMENT";
+    const b = {
+      id,
+      reference: `SS2026-${randomBytes(5).toString("hex").toUpperCase()}`,
+      eventId: e.id,
+      eventDate: input.eventDate,
+      name: input.name,
+      mobile,
+      email: input.email,
+      adults: input.adults,
+      kids: input.kids,
+      people,
+      amount,
+      method: amount === 0 ? "FREE" : input.method,
+      status,
+      holdUntil: new Date(
+        Date.now() +
+          60000 * (input.method === "CASH" ? e.cashHoldMinutes : e.holdMinutes),
+      ).toISOString(),
+      ticketNonce: randomBytes(32).toString("hex"),
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    const cols = Object.keys(b);
+    await tx.run(
+      `INSERT INTO bookings (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
+      Object.values(b),
+    );
+    await tx.run(
+      "INSERT INTO payments (id,bookingId,amount,status) VALUES (?,?,?,?)",
+      [randomUUID(), id, amount, amount === 0 ? "FREE" : "PENDING"],
+    );
+    await tx.run(
+      "INSERT INTO booking_requests (id,mobile,bookingId,fingerprint) VALUES (?,?,?,?)",
+      [key, mobile, id, fingerprint],
+    );
+    if (amount === 0) await activate(tx, b, "FREE");
+    else if (input.method === "CASH") await notification(tx, b, "CASH_PENDING");
+    return getBooking(tx, id);
+  });
+}
+export async function settleCaptured(
+  db,
+  orderId,
+  paymentId,
+  amount,
+  currency,
+  event,
+) {
+  return db.transaction(async (tx) => {
+    const e = await lockEvent(tx);
+    if (
+      event &&
+      (await tx.all("SELECT id FROM webhook_events WHERE id = ?", [event.id]))
+        .length
+    )
+      return;
+    const p = (
+      await tx.all("SELECT * FROM payments WHERE orderId = ? FOR UPDATE", [
+        orderId,
+      ])
+    )[0];
+    if (!p) fail(404, "Payment order not found.");
+    const b = await getBooking(tx, p.bookingId);
+    if (b.method !== "RAZORPAY" || amount !== b.amount || currency !== "INR")
+      fail(400, "Payment evidence does not match this booking.");
+    if (p.paymentId && p.paymentId !== paymentId)
+      fail(409, "A different payment is already recorded.");
+    if (p.status !== "CAPTURED") {
+      await expire(tx);
+      const current = await getBooking(tx, b.id);
+      let status = "PAID";
+      if (!["PAID", "FREE"].includes(current.status)) {
+        if (["CANCELLED", "PAYMENT_REVIEW"].includes(current.status))
+          status = "PAYMENT_REVIEW";
+        else if (current.status === "EXPIRED") {
+          try {
+            await ensureCapacity(tx, e, b.eventDate, b.people);
+          } catch (error) {
+            if (error instanceof AppError && error.status === 409)
+              status = "PAYMENT_REVIEW";
+            else throw error;
+          }
+        }
+        if (status === "PAID") await activate(tx, b);
+        else {
+          await tx.run(
+            "UPDATE bookings SET status = 'PAYMENT_REVIEW', updatedAt = ? WHERE id = ?",
+            [now(), b.id],
+          );
+          await notification(tx, b, "PAYMENT_REVIEW");
+        }
+      }
+      await tx.run(
+        "UPDATE payments SET paymentId = ?, status = 'CAPTURED', approvedAt = ? WHERE id = ?",
+        [paymentId, now(), p.id],
+      );
+      await audit(tx, null, "RAZORPAY_CAPTURED", b.id);
+    }
+    if (event)
+      await tx.run(
+        "INSERT INTO webhook_events (id,eventType,createdAt) VALUES (?,?,?)",
+        [event.id, event.type, now()],
+      );
+  });
+}
+export async function approveCash(db, id, amount, userId) {
+  return db.transaction(async (tx) => {
+    await lockEvent(tx);
+    await expire(tx);
+    const b = await getBooking(tx, id);
+    if (b.method !== "CASH")
+      fail(400, "Only cash bookings can be approved here.");
+    const p = (
+      await tx.all("SELECT * FROM payments WHERE bookingId = ?", [id])
+    )[0];
+    if (b.status === "PAID") return publicBooking(b);
+    if (b.status !== "PENDING_CASH")
+      fail(
+        409,
+        "Booking is no longer reserved. Restore it before collecting cash.",
+      );
+    if (amount !== b.amount)
+      fail(400, "Amount received must match the booking total in paise.");
+    await tx.run(
+      "UPDATE payments SET status = 'CAPTURED',receipt = ?,approvedBy = ?,approvedAt = ? WHERE id = ?",
+      [
+        `CASH-${randomBytes(6).toString("hex").toUpperCase()}`,
+        userId,
+        now(),
+        p.id,
+      ],
+    );
+    await activate(tx, b);
+    await audit(tx, userId, "CASH_APPROVED", id);
+    return publicBooking(await getBooking(tx, id));
+  });
+}
+export function eventToday() {
+  return demo
+    ? config.demoDate
+    : new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+}
+export async function verifyTicket(db, token) {
+  const b = (
+    await db.all("SELECT * FROM bookings WHERE qrHash = ?", [hash(token)])
+  )[0];
+  if (!b) fail(404, "INVALID TICKET: This QR code is not recognised.");
+  if (b.checkedInAt)
+    fail(
+      409,
+      `ALREADY CHECKED IN: ${new Date(b.checkedInAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`,
+    );
+  if (!["PAID", "FREE"].includes(b.status))
+    fail(403, "PAYMENT PENDING: Entry is not permitted.");
+  if (b.eventDate !== eventToday())
+    fail(400, "WRONG EVENT DATE: This ticket is not valid for today’s event.");
+  return b;
+}
+export async function checkin(db, token, userId, key) {
+  return db.transaction(async (tx) => {
+    await lockEvent(tx);
+    const previous = (
+      await tx.all("SELECT * FROM checkins WHERE idempotencyKey = ?", [key])
+    )[0];
+    if (previous) {
+      const b = await getBooking(tx, previous.bookingId);
+      if (b.qrHash !== hash(token) || previous.staffId !== userId)
+        fail(409, "Idempotency key already used.");
+      return previous;
+    }
+    const b = await verifyTicket(tx, token);
+    const at = now();
+    const result = await tx.run(
+      "UPDATE bookings SET checkedInAt = ?, updatedAt = ? WHERE id = ? AND checkedInAt IS NULL",
+      [at, at, b.id],
+    );
+    if (result.changes !== 1) fail(409, "ALREADY CHECKED IN");
+    const entry = {
+      id: randomUUID(),
+      bookingId: b.id,
+      staffId: userId,
+      eventDate: b.eventDate,
+      adults: b.adults,
+      kids: b.kids,
+      people: b.people,
+      idempotencyKey: key,
+      createdAt: at,
+    };
+    const cols = Object.keys(entry);
+    await tx.run(
+      `INSERT INTO checkins (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
+      Object.values(entry),
+    );
+    await audit(tx, userId, "GROUP_CHECKIN", b.id);
+    return entry;
+  });
+}
